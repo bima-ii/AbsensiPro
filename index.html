@@ -270,6 +270,26 @@ body {
 .jam-info-bar .jam-item { display: flex; align-items: center; gap: 4px; }
 .jam-info-bar .jam-divider { color: #B39DDB; }
 
+/* Holiday Card */
+.holiday-card {
+  display: none;
+  text-align: center;
+  padding: 32px 20px;
+  background: linear-gradient(135deg, #FFF8E1, #FFF3E0);
+  border: 2px solid #FFE0B2;
+  border-radius: var(--radius-lg);
+  margin-bottom: 16px;
+  animation: fadeInUp 0.4s ease;
+}
+.holiday-card.visible { display: block; }
+.holiday-card .holiday-icon { font-size: 56px; margin-bottom: 12px; }
+.holiday-card h3 {
+  font-size: 18px; font-weight: 700; color: #E65100; margin-bottom: 8px;
+}
+.holiday-card p {
+  font-size: 14px; color: #BF360C; line-height: 1.5;
+}
+
 /* ============================================================
    STATUS TOGGLE
    ============================================================ */
@@ -713,9 +733,16 @@ body {
       <!-- Jam Info -->
       <div class="jam-info-bar" id="jamInfoBar">
         <span>⏰</span>
-        <span class="jam-item">Masuk: <strong id="jamMasukInfo">08:00</strong></span>
+        <span class="jam-item">Masuk: <strong id="jamMasukInfo">08:00</strong> WIB</span>
         <span class="jam-divider">|</span>
-        <span class="jam-item">Pulang: <strong id="jamPulangInfo">17:00</strong></span>
+        <span class="jam-item">Pulang: <strong id="jamPulangInfo">17:00</strong> WIB</span>
+      </div>
+
+      <!-- Holiday Card -->
+      <div class="holiday-card" id="holidayCard">
+        <div class="holiday-icon">🏖️</div>
+        <h3 id="holidayTitle">Selamat Menikmati Hari Libur!</h3>
+        <p id="holidayMessage">Hari ini adalah hari libur. Absensi tidak dibuka. Istirahat yang cukup ya! 😊</p>
       </div>
 
       <!-- Success Card -->
@@ -850,7 +877,8 @@ let photoBase64 = null;
 let cameraStream = null;
 let isSubmitting = false;
 let allAbsensiData = [];
-let pengaturan = { jamMasuk: "08:00", jamPulang: "17:00", aktifkan: false };
+let pengaturan = { jamMasuk: "08:00", jamPulang: "17:00", aktifkan: false, hariLibur: [], latKantor: null, lngKantor: null, radius: 100 };
+let isHoliday = false;
 
 // ============================================================
 // INIT
@@ -1059,13 +1087,41 @@ async function loadPengaturan() {
       pengaturan = {
         jamMasuk: result.jamMasuk || '08:00',
         jamPulang: result.jamPulang || '17:00',
-        aktifkan: result.aktifkan === true
+        aktifkan: result.aktifkan === true,
+        hariLibur: result.hariLibur || []
       };
+
       // Show jam info bar
       if (pengaturan.aktifkan) {
         document.getElementById('jamMasukInfo').textContent = pengaturan.jamMasuk;
         document.getElementById('jamPulangInfo').textContent = pengaturan.jamPulang;
         document.getElementById('jamInfoBar').classList.add('visible');
+      }
+
+      // Check hari libur
+      if (pengaturan.hariLibur.length > 0) {
+        const hariMap = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
+        const todayHari = hariMap[new Date().getDay()];
+        if (pengaturan.hariLibur.includes(todayHari)) {
+          isHoliday = true;
+          document.getElementById('holidayTitle').textContent = 'Selamat Menikmati Hari Libur!';
+          document.getElementById('holidayMessage').textContent =
+            'Hari ini ' + todayHari + ' adalah hari libur. Absensi tidak dibuka. Istirahat yang cukup ya! 😊';
+          document.getElementById('holidayCard').classList.add('visible');
+          document.getElementById('absenFormCard').style.display = 'none';
+          document.getElementById('jamInfoBar').classList.remove('visible');
+          document.getElementById('gpsStatus').style.display = 'none';
+        }
+      }
+
+      // Store lokasi kantor
+      pengaturan.latKantor = result.latKantor || null;
+      pengaturan.lngKantor = result.lngKantor || null;
+      pengaturan.radius = result.radius || 100;
+
+      // Re-check GPS distance if already detected
+      if (gpsReady && pengaturan.latKantor && pengaturan.lngKantor) {
+        checkGPSDistance();
       }
     }
   } catch(e) { /* silent */ }
@@ -1091,6 +1147,10 @@ function initGPS() {
       gpsReady = true;
       statusEl.className = 'gps-status success';
       textEl.textContent = `Lokasi terdeteksi ✓ (${gpsLat.toFixed(5)}, ${gpsLng.toFixed(5)})`;
+      // Check distance if kantor coordinates are loaded
+      if (pengaturan.latKantor && pengaturan.lngKantor) {
+        checkGPSDistance();
+      }
       updateSubmitButton();
     },
     err => {
@@ -1104,6 +1164,36 @@ function initGPS() {
     },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
   );
+}
+
+// Check jarak GPS ke kantor
+function checkGPSDistance() {
+  if (!gpsReady || !pengaturan.latKantor || !pengaturan.lngKantor) return;
+
+  const statusEl = document.getElementById('gpsStatus');
+  const textEl = document.getElementById('gpsText');
+  const jarak = calculateDistance(gpsLat, gpsLng, pengaturan.latKantor, pengaturan.lngKantor);
+  const jarakStr = Math.round(jarak);
+
+  if (jarak <= pengaturan.radius) {
+    statusEl.className = 'gps-status success';
+    textEl.textContent = `Lokasi terdeteksi ✓ — ${jarakStr}m dari kantor (maks ${pengaturan.radius}m)`;
+  } else {
+    statusEl.className = 'gps-status error';
+    textEl.textContent = `⚠️ Terlalu jauh dari kantor! Jarak: ${jarakStr}m (maks ${pengaturan.radius}m)`;
+  }
+}
+
+// Haversine distance (meter)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
 }
 
 // ============================================================
